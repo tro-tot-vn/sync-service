@@ -139,7 +139,7 @@ class MilvusService:
                 field_name=sparse_field,
                 index_params={
                     "index_type": "SPARSE_INVERTED_INDEX",
-                    "metric_type": "IP"
+                    "metric_type": "BM25"
                 }
             )
         

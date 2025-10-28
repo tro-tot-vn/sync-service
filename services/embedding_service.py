@@ -1,46 +1,46 @@
 import torch
-from FlagEmbedding import BGEM3FlagModel
 from typing import List, Dict
 from loguru import logger
 from config.settings import settings
+from transformers import AutoModel
 
 class EmbeddingService:
     def __init__(self):
         self.device = settings.DEVICE if torch.cuda.is_available() else "cpu"
-        logger.info(f"Loading BGE-M3 model on {self.device}...")
+        logger.info(f"Loading custom BGE-M3 model from Hugging Face on {self.device}...")
         
-        self.model = BGEM3FlagModel(
+        # Load model using AutoModel (handles custom architecture automatically)
+        # Model: https://huggingface.co/lamdx4/bge-m3-vietnamese-rental-projection
+        self.model = AutoModel.from_pretrained(
             settings.EMBEDDING_MODEL,
-            use_fp16=True if self.device == "cuda" else False
+            trust_remote_code=True  # Required for custom model architecture
         )
         
-        logger.info("✅ BGE-M3 model loaded successfully")
+        self.model = self.model.to(self.device)
+        self.model.eval()
+        
+        logger.info("✅ Custom BGE-M3 projection model loaded from Hugging Face")
+        logger.info(f"   Model: {settings.EMBEDDING_MODEL}")
+        logger.info(f"   Output dimension: {settings.EMBEDDING_DIM}")
+        logger.info(f"   Device: {self.device}")
     
     def generate_dense_embedding(self, text: str, dim: int = None) -> List[float]:
         """
-        Generate dense embedding with custom dimension
+        Generate dense embedding using trained projection model
         
         Args:
             text: Input text
-            dim: Output dimension (default from settings)
+            dim: Output dimension (fixed at 128 for this model)
         
         Returns:
-            List of floats (embedding vector)
+            List of floats (L2-normalized embedding vector, 128-dim)
         """
-        if dim is None:
-            dim = settings.EMBEDDING_DIM
+        # Use model's encode method (from HF model card)
+        with torch.no_grad():
+            embedding = self.model.encode([text], device=self.device)  # [1, 128]
+            embedding = embedding[0].cpu().tolist()  # Convert to list
         
-        # Generate full embedding (1024 dims for BGE-M3)
-        embeddings = self.model.encode(
-            [text],
-            batch_size=1,
-            max_length=512
-        )['dense_vecs']
-        
-        # Reduce dimension (simple truncation)
-        reduced_embedding = embeddings[0][:dim].tolist()
-        
-        return reduced_embedding
+        return embedding
     
     def prepare_post_text(self, data: Dict) -> str:
         """
@@ -48,12 +48,12 @@ class EmbeddingService:
         This combines all fields for semantic understanding
         """
         return f"""
-{data['title']}
-{data['description']}
-Địa chỉ: {data['street']}, {data['ward']}, {data['district']}, {data['city']}
-Giá: {data['price']:,} VNĐ/tháng
-Diện tích: {data['acreage']}m²
-Nội thất: {data['interiorCondition']}
+            {data['title']}
+            {data['description']}
+            Địa chỉ: {data['street']}, {data['ward']}, {data['district']}, {data['city']}
+            Giá: {data['price']:,} VNĐ/tháng
+            Diện tích: {data['acreage']}m2
+            Nội thất: {data['interiorCondition']}
         """.strip()
     
     def prepare_user_text(self, data: Dict) -> str:

@@ -17,8 +17,9 @@ RUN pip install --no-cache-dir -r requirements.txt
 # Copy source code
 COPY . .
 
-# Download BGE-M3 model (cache in Docker layer)
-RUN python -c "from FlagEmbedding import BGEM3FlagModel; BGEM3FlagModel('BAAI/bge-m3')" || true
+# Pre-download custom projection model from HuggingFace (cache in Docker layer)
+RUN python -c "from transformers import AutoModel; \
+    AutoModel.from_pretrained('lamdx4/bge-m3-vietnamese-rental-projection', trust_remote_code=True)" || true
 
 # Run application
 CMD ["python", "app.py"]

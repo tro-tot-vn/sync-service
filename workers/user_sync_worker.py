@@ -1,85 +1,73 @@
-import redis
-import json
-import time
+from typing import Dict
 from loguru import logger
-from services import get_embedding_service, get_milvus_service
-from config.settings import settings
+from services.debezium_consumer import DebeziumConsumer
+from services import get_milvus_service, get_embedding_service
+
 
 class UserSyncWorker:
-    def __init__(self):
-        self.redis_client = redis.Redis(
-            host=settings.REDIS_HOST,
-            port=settings.REDIS_PORT,
-            decode_responses=True
+    """
+    Worker to sync Customer changes from SQL Server (via Debezium CDC) to Milvus.
+    All customers are synced (no status filtering).
+    """
+    
+    def __init__(self, redis_client):
+        self.consumer = DebeziumConsumer(
+            redis_client=redis_client,
+            stream_name='dbz.trotot.Customer',
+            group_name='sync-service-group',
+            consumer_name='user-worker'
         )
-        self.embedding_service = get_embedding_service()
-        self.milvus_service = get_milvus_service()
-        self.queue_name = "bullmq:user-sync:wait"
+        self.milvus = get_milvus_service()
+        self.embedding = get_embedding_service()
     
-    def process_job(self, job_data: dict):
-        """Process a single sync job"""
-        operation = job_data.get("operation")
-        customer_id = job_data.get("customerId")
-        data = job_data.get("data")
+    def start(self):
+        """Start consuming CDC events"""
+        self.consumer.consume(handler=self._handle_event)
+    
+    def _handle_event(self, operation: str, event: Dict):
+        """
+        Handle CDC event based on operation type.
         
-        logger.info(f"🔄 Processing {operation} for user {customer_id}")
+        Args:
+            operation: 'c' (create), 'u' (update), 'd' (delete), 'r' (snapshot read)
+            event: Debezium CDC event payload
+        """
+        payload = event['payload']
         
-        try:
-            if operation in ["insert", "update"]:
-                self._handle_upsert(customer_id, data)
-            elif operation == "delete":
-                self._handle_delete(customer_id)
-            else:
-                raise ValueError(f"Unknown operation: {operation}")
+        if operation in ['c', 'u']:  # Create or Update
+            data = payload['after']
+            customer_id = data['customerId']
             
-            logger.info(f"✅ Completed {operation} for user {customer_id}")
-            return True
-            
-        except Exception as e:
-            logger.error(f"❌ Failed to process user {customer_id}: {e}")
-            raise
-    
-    def _handle_upsert(self, user_id: int, data: dict):
-        """Handle insert/update"""
-        # 1. Prepare text
-        text = self.embedding_service.prepare_user_text(data)
-        
-        # 2. Generate user embedding
-        logger.info(f"  📝 Generating user embedding (128-dim)...")
-        embedding = self.embedding_service.generate_dense_embedding(text, dim=128)
-        
-        # 3. Upsert to Milvus
-        logger.info(f"  💾 Upserting to Milvus...")
-        self.milvus_service.upsert_user(
-            user_id=user_id,
-            embedding=embedding,
-            data=data
-        )
-    
-    def _handle_delete(self, user_id: int):
-        """Handle delete"""
-        logger.info(f"  🗑️  Deleting from Milvus...")
-        self.milvus_service.delete_user(user_id)
-    
-    def run(self):
-        """Main worker loop"""
-        logger.info("🚀 User sync worker started")
-        
-        while True:
             try:
-                # Pop job from Redis queue
-                result = self.redis_client.blpop("user-sync-simple", timeout=5)
+                # Generate embedding
+                text = self.embedding.prepare_user_text(data)
+                logger.debug(f"  📝 Generating embedding for customer {customer_id}...")
+                embedding = self.embedding.generate_dense_embedding(text, dim=128)
                 
-                if result:
-                    _, job_json = result
-                    job_data = json.loads(job_json)
-                    self.process_job(job_data)
+                # Upsert to Milvus
+                logger.debug(f"  💾 Upserting customer {customer_id} to Milvus...")
+                self.milvus.upsert_user(
+                    user_id=customer_id,
+                    embedding=embedding,
+                    data=data
+                )
                 
-            except KeyboardInterrupt:
-                logger.info("👋 Shutting down worker...")
-                break
+                op_name = 'created' if operation == 'c' else 'updated'
+                logger.info(f"✅ Customer {customer_id} {op_name} and synced")
+                
             except Exception as e:
-                logger.error(f"Worker error: {e}")
-                time.sleep(5)
-
-
+                logger.error(f"❌ Failed to sync customer {customer_id}: {e}")
+                raise
+        
+        elif operation == 'd':  # Delete
+            customer_id = payload['before']['customerId']
+            
+            try:
+                self.milvus.delete_user(customer_id)
+                logger.info(f"🗑️  Customer {customer_id} deleted from Milvus")
+            except Exception as e:
+                logger.error(f"❌ Failed to delete customer {customer_id}: {e}")
+                raise
+        
+        elif operation == 'r':  # Snapshot read (skip for now)
+            logger.debug(f"⏭️  Skipping snapshot read event")

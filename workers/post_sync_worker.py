@@ -1,93 +1,120 @@
-import redis
-import json
-import time
+from typing import Dict
 from datetime import datetime
 from loguru import logger
-from services import get_embedding_service, get_milvus_service
-from config.settings import settings
+from services.debezium_consumer import DebeziumConsumer
+from services import get_milvus_service, get_embedding_service
+
 
 class PostSyncWorker:
-    def __init__(self):
-        self.redis_client = redis.Redis(
-            host=settings.REDIS_HOST,
-            port=settings.REDIS_PORT,
-            decode_responses=True
-        )
-        self.embedding_service = get_embedding_service()
-        self.milvus_service = get_milvus_service()
-        self.queue_name = "bullmq:post-sync:wait"
+    """
+    Worker to sync Post changes from SQL Server (via Debezium CDC) to Milvus.
+    Only APPROVED posts are stored in Milvus.
+    """
     
-    def process_job(self, job_data: dict):
-        """Process a single sync job"""
-        operation = job_data.get("operation")
-        post_id = job_data.get("postId")
-        data = job_data.get("data")
+    def __init__(self, redis_client):
+        self.consumer = DebeziumConsumer(
+            redis_client=redis_client,
+            stream_name='dbz.trotot.Post',
+            group_name='sync-service-group',
+            consumer_name='post-worker'
+        )
+        self.milvus = get_milvus_service()
+        self.embedding = get_embedding_service()
+    
+    def start(self):
+        """Start consuming CDC events"""
+        self.consumer.consume(handler=self._handle_event)
+    
+    def _handle_event(self, operation: str, event: Dict):
+        """
+        Handle CDC event based on operation type.
         
-        logger.info(f"🔄 Processing {operation} for post {post_id}")
+        Args:
+            operation: 'c' (create), 'u' (update), 'd' (delete), 'r' (snapshot read)
+            event: Debezium CDC event payload
+        """
+        payload = event['payload']
+        
+        if operation == 'c':  # Create
+            self._handle_create(payload['after'])
+        elif operation == 'u':  # Update
+            self._handle_update(payload['before'], payload['after'])
+        elif operation == 'd':  # Delete
+            self._handle_delete(payload['before'])
+        elif operation == 'r':  # Snapshot read (skip for now)
+            logger.debug(f"⏭️  Skipping snapshot read event")
+    
+    def _handle_create(self, after_data: Dict):
+        """Handle post creation"""
+        post_id = after_data['postId']
+        status = after_data.get('status')
+        
+        # Only insert if APPROVED
+        if status == 'APPROVED':
+            self._sync_to_milvus(after_data)
+            logger.info(f"✅ Post {post_id} created and synced (APPROVED)")
+        else:
+            logger.debug(f"⏭️  Post {post_id} created but not APPROVED (status: {status}), skipping")
+    
+    def _handle_update(self, before_data: Dict, after_data: Dict):
+        """Handle post update with state transition logic"""
+        post_id = after_data['postId']
+        old_status = before_data.get('status')
+        new_status = after_data.get('status')
+        
+        # State transition logic
+        if old_status != 'APPROVED' and new_status == 'APPROVED':
+            # Transition to APPROVED: INSERT to Milvus
+            self._sync_to_milvus(after_data)
+            logger.info(f"✅ Post {post_id} approved (transition: {old_status} → {new_status}), synced to Milvus")
+        
+        elif old_status == 'APPROVED' and new_status == 'APPROVED':
+            # Still APPROVED: UPDATE in Milvus
+            self._sync_to_milvus(after_data)
+            logger.info(f"♻️  Post {post_id} updated in Milvus (still APPROVED)")
+        
+        elif old_status == 'APPROVED' and new_status != 'APPROVED':
+            # Transition from APPROVED: DELETE from Milvus
+            self.milvus.delete_post(post_id)
+            logger.info(f"🗑️  Post {post_id} status changed (APPROVED → {new_status}), deleted from Milvus")
+        
+        else:
+            # Not APPROVED before or after: do nothing
+            logger.debug(f"⏭️  Post {post_id} status: {old_status} → {new_status} (not APPROVED), skipping")
+    
+    def _handle_delete(self, before_data: Dict):
+        """Handle post deletion"""
+        post_id = before_data['postId']
+        # Always try to delete (idempotent operation)
+        self.milvus.delete_post(post_id)
+        logger.info(f"🗑️  Post {post_id} deleted from database, removed from Milvus")
+    
+    def _sync_to_milvus(self, data: Dict):
+        """Sync post data to Milvus (generate embedding and upsert)"""
+        post_id = data['postId']
         
         try:
-            if operation in ["insert", "update"]:
-                self._handle_upsert(post_id, data)
-            elif operation == "delete":
-                self._handle_delete(post_id)
-            else:
-                raise ValueError(f"Unknown operation: {operation}")
+            # 1. Prepare text for embedding
+            text = self.embedding.prepare_post_text(data)
             
-            logger.info(f"✅ Completed {operation} for post {post_id}")
-            return True
+            # 2. Generate dense embedding (128-dim BGE-M3)
+            logger.debug(f"  📝 Generating embedding for post {post_id}...")
+            dense_vec = self.embedding.generate_dense_embedding(text, dim=128)
+            
+            # 3. Convert date strings to datetime if needed
+            if isinstance(data.get('createdAt'), str):
+                data['createdAt'] = datetime.fromisoformat(data['createdAt'].replace('Z', '+00:00'))
+            if isinstance(data.get('extendedAt'), str):
+                data['extendedAt'] = datetime.fromisoformat(data['extendedAt'].replace('Z', '+00:00'))
+            
+            # 4. Upsert to Milvus (BM25 sparse vectors auto-generated)
+            logger.debug(f"  💾 Upserting post {post_id} to Milvus...")
+            self.milvus.upsert_post(
+                post_id=post_id,
+                dense_vec=dense_vec,
+                data=data
+            )
             
         except Exception as e:
-            logger.error(f"❌ Failed to process post {post_id}: {e}")
+            logger.error(f"❌ Failed to sync post {post_id} to Milvus: {e}")
             raise
-    
-    def _handle_upsert(self, post_id: int, data: dict):
-        """Handle insert/update"""
-        # 1. Prepare text for dense embedding
-        text = self.embedding_service.prepare_post_text(data)
-        
-        # 2. Generate dense vector (BGE-M3 128-dim)
-        logger.info(f"  📝 Generating dense embedding (128-dim)...")
-        dense_vec = self.embedding_service.generate_dense_embedding(text, dim=128)
-        
-        # 3. Convert date strings to datetime if needed
-        if isinstance(data.get('createdAt'), str):
-            data['createdAt'] = datetime.fromisoformat(data['createdAt'].replace('Z', '+00:00'))
-        if isinstance(data.get('extendedAt'), str):
-            data['extendedAt'] = datetime.fromisoformat(data['extendedAt'].replace('Z', '+00:00'))
-        
-        # 4. Upsert to Milvus (Milvus auto-generates 3 sparse vectors from text fields)
-        logger.info(f"  💾 Upserting to Milvus...")
-        self.milvus_service.upsert_post(
-            post_id=post_id,
-            dense_vec=dense_vec,
-            data=data
-        )
-    
-    def _handle_delete(self, post_id: int):
-        """Handle delete"""
-        logger.info(f"  🗑️  Deleting from Milvus...")
-        self.milvus_service.delete_post(post_id)
-    
-    def run(self):
-        """Main worker loop"""
-        logger.info("🚀 Post sync worker started")
-        
-        while True:
-            try:
-                # Pop job from Redis queue
-                # Using simple list-based queue (compatible with BullMQ)
-                result = self.redis_client.blpop("post-sync-simple", timeout=5)
-                
-                if result:
-                    _, job_json = result
-                    job_data = json.loads(job_json)
-                    self.process_job(job_data)
-                
-            except KeyboardInterrupt:
-                logger.info("👋 Shutting down worker...")
-                break
-            except Exception as e:
-                logger.error(f"Worker error: {e}")
-                time.sleep(5)
-
-

@@ -24,3 +24,4 @@ venv.bak/
 # OS noise
 .DS_Store
 Thumbs.db
+*.pt
