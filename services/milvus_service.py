@@ -16,7 +16,6 @@ class MilvusService:
         self.host = settings.MILVUS_HOST
         self.port = settings.MILVUS_PORT
         self.posts_collection = "posts_hybrid"
-        self.users_collection = "users"
         
         connections.connect(
             alias="default",
@@ -28,7 +27,6 @@ class MilvusService:
     def initialize(self):
         """Initialize collections"""
         self._create_posts_collection()
-        self._create_users_collection()
         logger.info("✅ Milvus collections initialized")
     
     def _create_posts_collection(self):
@@ -155,35 +153,6 @@ class MilvusService:
         collection.load()
         logger.info(f"✅ Collection {self.posts_collection} created with multi-field BM25")
     
-    def _create_users_collection(self):
-        """Create users collection"""
-        if utility.has_collection(self.users_collection):
-            logger.info(f"Collection {self.users_collection} already exists")
-            return
-        
-        fields = [
-            FieldSchema(name="id", dtype=DataType.INT64, is_primary=True, auto_id=False),
-            FieldSchema(name="user_embedding", dtype=DataType.FLOAT_VECTOR, dim=128),
-            FieldSchema(name="name", dtype=DataType.VARCHAR, max_length=200),
-            FieldSchema(name="gender", dtype=DataType.VARCHAR, max_length=10),
-            FieldSchema(name="city", dtype=DataType.VARCHAR, max_length=100),
-        ]
-        
-        schema = CollectionSchema(fields=fields, enable_dynamic_field=True)
-        collection = Collection(name=self.users_collection, schema=schema)
-        
-        collection.create_index(
-            field_name="user_embedding",
-            index_params={
-                "index_type": "HNSW",
-                "metric_type": "COSINE",
-                "params": {"M": 16, "efConstruction": 256}
-            }
-        )
-        
-        collection.load()
-        logger.info(f"✅ Collection {self.users_collection} created")
-    
     def upsert_post(self, post_id: int, dense_vec: list, data: dict):
         """Upsert post with multi-field BM25"""
         collection = Collection(self.posts_collection)
@@ -228,32 +197,6 @@ class MilvusService:
         expr = f"id == {post_id}"
         collection.delete(expr)
         logger.info(f"✅ Deleted post {post_id}")
-    
-    def upsert_user(self, user_id: int, embedding: list, data: dict):
-        """Upsert user to Milvus"""
-        collection = Collection(self.users_collection)
-        
-        expr = f"id == {user_id}"
-        collection.delete(expr)
-        
-        entities = [{
-            "id": user_id,
-            "user_embedding": embedding,
-            "name": f"{data['firstName']} {data['lastName']}",
-            "gender": data["gender"],
-            "city": data.get("address", ""),
-        }]
-        
-        collection.insert(entities)
-        collection.flush()
-        logger.info(f"✅ Upserted user {user_id}")
-    
-    def delete_user(self, user_id: int):
-        """Delete user from Milvus"""
-        collection = Collection(self.users_collection)
-        expr = f"id == {user_id}"
-        collection.delete(expr)
-        logger.info(f"✅ Deleted user {user_id}")
 
 # Singleton
 _milvus_service = None

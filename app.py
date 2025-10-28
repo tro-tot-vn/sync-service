@@ -4,7 +4,7 @@ import time
 from loguru import logger
 from config.settings import settings
 from services import get_milvus_service
-from workers import PostSyncWorker, UserSyncWorker
+from workers import PostSyncWorker
 
 
 def main():
@@ -34,22 +34,18 @@ def main():
         logger.error(f"❌ Failed to connect to Redis: {e}")
         return
     
-    # Create workers
+    # Create worker
     post_worker = PostSyncWorker(redis_client)
-    user_worker = UserSyncWorker(redis_client)
     
-    # Start workers in separate threads
-    logger.info("🔄 Starting CDC event consumers...")
+    # Start worker in separate thread
+    logger.info("🔄 Starting CDC event consumer...")
     post_thread = threading.Thread(target=post_worker.start, daemon=True, name="PostWorker")
-    user_thread = threading.Thread(target=user_worker.start, daemon=True, name="UserWorker")
     
     post_thread.start()
-    user_thread.start()
     
-    logger.info("✅ All workers started")
+    logger.info("✅ Worker started")
     logger.info("📡 Consuming CDC events from Redis Streams:")
-    logger.info("   - dbz.trotot.Post (for posts)")
-    logger.info("   - dbz.trotot.Customer (for users)")
+    logger.info("   - dbz.trotot.TroTotVN.dbo.Post (for posts)")
     
     try:
         # Keep main thread alive

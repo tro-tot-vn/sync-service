@@ -55,23 +55,6 @@ class EmbeddingService:
             Diện tích: {data['acreage']}m2
             Nội thất: {data['interiorCondition']}
         """.strip()
-    
-    def prepare_user_text(self, data: Dict) -> str:
-        """Prepare user data for embedding"""
-        parts = [
-            f"{data['firstName']} {data['lastName']}",
-        ]
-        
-        if data.get('bio'):
-            parts.append(data['bio'])
-        
-        if data.get('currentJob'):
-            parts.append(f"Nghề nghiệp: {data['currentJob']}")
-        
-        if data.get('address'):
-            parts.append(f"Địa chỉ: {data['address']}")
-        
-        return "\n".join(parts)
 
 # Singleton instance
 _embedding_service = None

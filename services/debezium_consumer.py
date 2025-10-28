@@ -51,7 +51,9 @@ class DebeziumConsumer:
                 
                 if not messages:
                     continue
-                
+                else: 
+                    logger.info(f"🔄 Found {len(messages)} messages in stream '{self.stream_name}'")
+                    
                 for stream_name, stream_messages in messages:
                     for message_id, fields in stream_messages:
                         try:
@@ -76,12 +78,12 @@ class DebeziumConsumer:
     
     def _parse_cdc_event(self, fields: Dict) -> Dict:
         """Parse Debezium CDC event from Redis Stream message"""
-        # Debezium sends payload as JSON string in 'payload' field
-        payload_bytes = fields.get(b'payload') or fields.get('payload')
-        if isinstance(payload_bytes, bytes):
-            payload_str = payload_bytes.decode('utf-8')
+        # Debezium sends event in 'value' field (with 'key' field for primary key)
+        value_bytes = fields.get(b'value') or fields.get('value')
+        if isinstance(value_bytes, bytes):
+            value_str = value_bytes.decode('utf-8')
         else:
-            payload_str = payload_bytes
+            value_str = value_bytes
         
-        return json.loads(payload_str)
+        return json.loads(value_str)
 
