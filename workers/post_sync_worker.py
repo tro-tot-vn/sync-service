@@ -14,7 +14,7 @@ class PostSyncWorker:
     def __init__(self, redis_client):
         self.consumer = DebeziumConsumer(
             redis_client=redis_client,
-            stream_name='dbz.trotot.TroTotVN.dbo.Post',  # Real stream name from Debezium
+            stream_name='dbserver.TroTotVN.dbo.Post',  # Debezium Redis sink stream name
             group_name='sync-service-group',
             consumer_name='post-worker'
         )

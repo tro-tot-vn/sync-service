@@ -45,7 +45,9 @@ def main():
     
     logger.info("✅ Worker started")
     logger.info("📡 Consuming CDC events from Redis Streams:")
-    logger.info("   - dbz.trotot.TroTotVN.dbo.Post (for posts)")
+    logger.info("   - Stream: dbserver.TroTotVN.dbo.Post")
+    logger.info("   - Group: sync-service-group")
+    logger.info("   - Consumer: post-worker")
     
     try:
         # Keep main thread alive
