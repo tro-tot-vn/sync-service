@@ -81,6 +81,7 @@ class MilvusService:
             FieldSchema(name="ward", dtype=DataType.VARCHAR, max_length=100),
             FieldSchema(name="street", dtype=DataType.VARCHAR, max_length=200),
             FieldSchema(name="interior_condition", dtype=DataType.VARCHAR, max_length=20),
+            FieldSchema(name="status", dtype=DataType.VARCHAR, max_length=20),  # Approved/Pending/Rejected/Hidden
             
             # Metadata
             FieldSchema(name="owner_id", dtype=DataType.INT64),
@@ -149,6 +150,10 @@ class MilvusService:
             field_name="city",
             index_params={"index_type": "TRIE"}
         )
+        collection.create_index(
+            field_name="status",
+            index_params={"index_type": "TRIE"}
+        )
         
         collection.load()
         logger.info(f"✅ Collection {self.posts_collection} created with multi-field BM25")
@@ -182,6 +187,7 @@ class MilvusService:
             "ward": data["ward"],
             "street": data["street"],
             "interior_condition": data["interiorCondition"],
+            "status": data["status"],  # Store status: Approved/Pending/Rejected/Hidden
             "owner_id": data["ownerId"],
             "created_at": created_at,
             "extended_at": extended_at,

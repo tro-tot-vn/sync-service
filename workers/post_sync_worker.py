@@ -8,7 +8,7 @@ from services import get_milvus_service, get_embedding_service
 class PostSyncWorker:
     """
     Worker to sync Post changes from SQL Server (via Debezium CDC) to Milvus.
-    Only APPROVED posts are stored in Milvus.
+    ALL posts (Approved/Pending/Rejected/Hidden) are stored with status field.
     """
     
     def __init__(self, redis_client):
@@ -45,42 +45,26 @@ class PostSyncWorker:
             logger.debug(f"⏭️  Skipping snapshot read event")
     
     def _handle_create(self, after_data: Dict):
-        """Handle post creation"""
+        """Handle post creation - sync ALL posts regardless of status"""
         post_id = after_data['postId']
-        status = after_data.get('status')
+        status = after_data.get('status', 'Unknown')
         
-        # Only insert if Approved (capitalized, as per SQL Server data)
-        if status == 'Approved':
-            self._sync_to_milvus(after_data)
-            logger.info(f"✅ Post {post_id} created and synced (Approved)")
-        else:
-            logger.debug(f"⏭️  Post {post_id} created but not Approved (status: {status}), skipping")
+        self._sync_to_milvus(after_data)
+        logger.info(f"✅ Post {post_id} created and synced (status: {status})")
     
     def _handle_update(self, before_data: Dict, after_data: Dict):
-        """Handle post update with state transition logic"""
+        """Handle post update - sync ALL status changes"""
         post_id = after_data['postId']
-        old_status = before_data.get('status')
-        new_status = after_data.get('status')
+        old_status = before_data.get('status', 'Unknown')
+        new_status = after_data.get('status', 'Unknown')
         
-        # State transition logic (status is capitalized: "Approved", "Pending", "Rejected")
-        if old_status != 'Approved' and new_status == 'Approved':
-            # Transition to Approved: INSERT to Milvus
-            self._sync_to_milvus(after_data)
-            logger.info(f"✅ Post {post_id} approved (transition: {old_status} → {new_status}), synced to Milvus")
+        # Always upsert to Milvus with new data (including status changes)
+        self._sync_to_milvus(after_data)
         
-        elif old_status == 'Approved' and new_status == 'Approved':
-            # Still Approved: UPDATE in Milvus
-            self._sync_to_milvus(after_data)
-            logger.info(f"♻️  Post {post_id} updated in Milvus (still Approved)")
-        
-        elif old_status == 'Approved' and new_status != 'Approved':
-            # Transition from Approved: DELETE from Milvus
-            self.milvus.delete_post(post_id)
-            logger.info(f"🗑️  Post {post_id} status changed (Approved → {new_status}), deleted from Milvus")
-        
+        if old_status != new_status:
+            logger.info(f"♻️  Post {post_id} updated (status: {old_status} → {new_status})")
         else:
-            # Not Approved before or after: do nothing
-            logger.debug(f"⏭️  Post {post_id} status: {old_status} → {new_status} (not Approved), skipping")
+            logger.info(f"♻️  Post {post_id} updated (status: {new_status})")
     
     def _handle_delete(self, before_data: Dict):
         """Handle post deletion"""
