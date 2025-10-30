@@ -7,7 +7,7 @@ class Settings(BaseSettings):
     
     # Milvus
     MILVUS_HOST: str = "localhost"
-    MILVUS_PORT: int = 19530
+    MILVUS_PORT: int = 19531  # Remapped from 19530 for shared server
     
     # Model (Hugging Face)
     EMBEDDING_MODEL: str = "lamdx4/bge-m3-vietnamese-rental-projection"
