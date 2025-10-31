@@ -21,7 +21,7 @@ class PostSyncWorker:
         
         self.consumer = DebeziumConsumer(
             redis_client=redis_client,
-            stream_name='dbz.trotot.Post',
+            stream_name='dbz.trotot.TroTotVN.dbo.Post',
             group_name='sync-service-group',
             consumer_name=self.consumer_name
         )
