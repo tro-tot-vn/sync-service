@@ -194,7 +194,6 @@ class MilvusService:
         }]
         
         collection.insert(entities)
-        collection.flush()
         logger.info(f"✅ Upserted post {post_id} (3 sparse vectors auto-generated)")
     
     def delete_post(self, post_id: int):
