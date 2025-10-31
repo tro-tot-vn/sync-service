@@ -51,8 +51,6 @@ class DebeziumConsumer:
                 
                 if not messages:
                     continue
-                else: 
-                    logger.info(f"🔄 Found {len(messages)} messages in stream '{self.stream_name}'")
                     
                 for stream_name, stream_messages in messages:
                     for message_id, fields in stream_messages:
