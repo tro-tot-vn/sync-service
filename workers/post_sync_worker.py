@@ -21,7 +21,7 @@ class PostSyncWorker:
         
         self.consumer = DebeziumConsumer(
             redis_client=redis_client,
-            stream_name='dbz.trotot.TroTotVN.dbo.Post',
+            stream_name='dbserver.TroTotVN.dbo.Post',
             group_name='sync-service-group',
             consumer_name=self.consumer_name
         )
@@ -73,8 +73,8 @@ class PostSyncWorker:
             self._handle_update(payload['before'], payload['after'])
         elif operation == 'd':  # Delete
             self._handle_delete(payload['before'])
-        elif operation == 'r':  # Snapshot read (skip for now)
-            logger.debug(f"⏭️  Skipping snapshot read event")
+        elif operation == 'r':  # Snapshot read - sync existing data
+            self._handle_create(payload['after'])
     
     def _handle_create(self, after_data: Dict):
         """Handle post creation - sync ALL posts regardless of status"""
