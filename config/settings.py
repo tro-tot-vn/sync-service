@@ -4,6 +4,7 @@ class Settings(BaseSettings):
     # Redis
     REDIS_HOST: str = "localhost"
     REDIS_PORT: int = 5555
+    REDIS_PASSWORD: str = ""
     
     # Milvus
     MILVUS_HOST: str = "localhost"
